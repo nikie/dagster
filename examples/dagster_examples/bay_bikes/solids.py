@@ -38,6 +38,7 @@ from dagster import (
     solid,
 )
 
+# Added this to silence tensorflow logs. They are insanely verbose.
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 
@@ -342,6 +343,7 @@ class MultivariateTimeseries:
         self.output_timeseries_name = check.str_param(output_sequence_name, 'output_sequence_name')
 
     def convert_to_snapshot_matrix(self, memory_length):
+        # Transpose the matrix so that inputs match up with tensorflow tensor expectation
         input_snapshot_matrix = transpose(
             [
                 timeseries.convert_to_snapshot_sequence(memory_length)
@@ -384,20 +386,29 @@ def produce_training_set(
 
 @solid(
     config={
-        'lstm_layer_config': Field(
-            Dict({'activation': Field(String, is_optional=True, default_value='relu')})
+        'timeseries_train_test_breakpoint': Field(
+            int, description='The breakpoint between training and test set'
         ),
+        'lstm_layer_config': Field(
+            Dict(
+                {
+                    'activation': Field(str, is_optional=True, default_value='relu'),
+                    'num_recurrant_units': Field(int, is_optional=True, default_value=50),
+                }
+            )
+        ),
+        'num_dense_layers': Field(int, is_optional=True, default_value=1),
         'model_trainig_config': Field(
             Dict(
                 {
                     'optimizer': Field(
-                        String,
+                        str,
                         description='Type of optimizer to use',
                         is_optional=True,
                         default_value='adam',
                     ),
-                    'loss': Field(String, is_optional=True, default_value='mse'),
-                    'num_epochs': Field(Int, description='Number of epochs to optimize over'),
+                    'loss': Field(str, is_optional=True, default_value='mse'),
+                    'num_epochs': Field(int, description='Number of epochs to optimize over'),
                 }
             )
         ),
@@ -405,19 +416,20 @@ def produce_training_set(
 )
 def train_lstm_model(context, training_set: TrainingSet) -> Any:
     X, y = training_set
-    X_train, X_test = X[0:550], X[550:]
-    y_train, y_test = y[0:550], y[550:]
+    breakpoint = context.solid_config['timeseries_train_test_breakpoint']  # pylint: disable=W0622
+    X_train, X_test = X[0:breakpoint], X[breakpoint:]
+    y_train, y_test = y[0:breakpoint], y[breakpoint:]
 
     _, n_steps, n_features = X.shape
     model = Sequential()
     model.add(
         LSTM(
-            50,
+            context.solid_config['lstm_layer_config']['num_recurrant_units'],
             activation=context.solid_config['lstm_layer_config']['activation'],
             input_shape=(n_steps, n_features),
         )
     )
-    model.add(Dense(1))
+    model.add(Dense(context.solid_config['num_dense_layers']))
     model.compile(
         optimizer=context.solid_config['model_trainig_config']['optimizer'],
         loss=context.solid_config['model_trainig_config']['loss'],

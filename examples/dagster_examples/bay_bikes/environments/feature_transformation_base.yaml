@@ -20,4 +20,6 @@ solids:
             value: weather.csv
   train_lstm_model:
     config:
-      num_epochs: 200
+      timeseries_train_test_breakpoint: 550
+      model_trainig_config:
+        num_epochs: 200
